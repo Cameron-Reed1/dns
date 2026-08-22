@@ -4,7 +4,6 @@ const Allocator = std.mem.Allocator;
 
 var next_id: std.atomic.Value(u16) = .init(1);
 
-
 pub const Result = struct {
     answers: []RecordData,
     authority_records: []RecordData,
@@ -130,7 +129,6 @@ pub const RecordData = union(RecordType) {
         addr: [16]u8,
     };
 
-
     pub fn parse(ctx: *MessageParseContext, rtype: RecordType, data: []const u8) !RecordData {
         return switch (rtype) {
             .a => blk: {
@@ -245,32 +243,29 @@ pub const RecordData = union(RecordType) {
     pub fn print(self: *const RecordData) void {
         switch (self.*) {
             .a => |a| std.debug.print("A: {d}.{d}.{d}.{d}\n", .{ a.addr[0], a.addr[1], a.addr[2], a.addr[3] }),
-            .ns => |ns| std.debug.print("NS: {s}\n", .{ ns.nsdname }),
-            .md => |md| std.debug.print("MD: {s}\n", .{ md.madname }),
-            .mf => |mf| std.debug.print("MF: {s}\n", .{ mf.madname }),
-            .cname => |cname| std.debug.print("CNAME: {s}\n", .{ cname.cname }),
-            .soa => |soa| std.debug.print("SOA:\n\tMNAME: {s}\n\tRNAME: {s}\n\tSERIAL: {d}\n\tREFRESH: {d}\n\tRETRY: {d}\n\tEXPIRE: {d}\n\tMINIMUM: {d}\n",
-                .{ soa.mname, soa.rname, soa.serial, soa.refresh, soa.retry, soa.expire, soa.minimum }),
-            .mb => |mb| std.debug.print("MB: {s}\n", .{ mb.madname }),
-            .mg => |mg| std.debug.print("MG: {s}\n", .{ mg.madname }),
-            .mr => |mr| std.debug.print("MR: {s}\n", .{ mr.newname }),
-            .null => |n| std.debug.print("NULL: {any}\n", .{ n.data }),
+            .ns => |ns| std.debug.print("NS: {s}\n", .{ns.nsdname}),
+            .md => |md| std.debug.print("MD: {s}\n", .{md.madname}),
+            .mf => |mf| std.debug.print("MF: {s}\n", .{mf.madname}),
+            .cname => |cname| std.debug.print("CNAME: {s}\n", .{cname.cname}),
+            .soa => |soa| std.debug.print("SOA:\n\tMNAME: {s}\n\tRNAME: {s}\n\tSERIAL: {d}\n\tREFRESH: {d}\n\tRETRY: {d}\n\tEXPIRE: {d}\n\tMINIMUM: {d}\n", .{ soa.mname, soa.rname, soa.serial, soa.refresh, soa.retry, soa.expire, soa.minimum }),
+            .mb => |mb| std.debug.print("MB: {s}\n", .{mb.madname}),
+            .mg => |mg| std.debug.print("MG: {s}\n", .{mg.madname}),
+            .mr => |mr| std.debug.print("MR: {s}\n", .{mr.newname}),
+            .null => |n| std.debug.print("NULL: {any}\n", .{n.data}),
             .wks => |wks| std.debug.print("WKS:\n\tADDR: {d}.{d}.{d}.{d}\n\tPROTOCOL: {d}\n\tBITMAP: {any}\n", .{ wks.addr[0], wks.addr[1], wks.addr[2], wks.addr[3], wks.protocol, wks.bitmap }),
-            .ptr => |ptr| std.debug.print("PTR: {s}\n", .{ ptr.ptrdname }),
+            .ptr => |ptr| std.debug.print("PTR: {s}\n", .{ptr.ptrdname}),
             .hinfo => |hinfo| std.debug.print("HINFO:\n\tCPU: {s}\n\tOS: {s}\n", .{ hinfo.cpu, hinfo.os }),
             .minfo => |minfo| std.debug.print("MINFO:\n\tRMAILBX: {s}\n\tEMAILBX: {s}\n", .{ minfo.rmailbx, minfo.emailbx }),
             .mx => |mx| std.debug.print("MX:\n\tPREFERENCE: {d}\n\tEXCHANGE: {s}\n", .{ mx.preference, mx.exchange }),
-            .txt => |txt| std.debug.print("TXT: {s}\n", .{ txt.data }),
+            .txt => |txt| std.debug.print("TXT: {s}\n", .{txt.data}),
 
-            .aaaa => |aaaa| std.debug.print("AAAA: {x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}\n",
-                .{ aaaa.addr[0], aaaa.addr[1], aaaa.addr[2], aaaa.addr[3], aaaa.addr[4], aaaa.addr[5], aaaa.addr[6], aaaa.addr[7],
-                    aaaa.addr[8], aaaa.addr[9], aaaa.addr[10], aaaa.addr[11], aaaa.addr[12], aaaa.addr[13], aaaa.addr[14], aaaa.addr[15] }),
+            .aaaa => |aaaa| std.debug.print("AAAA: {x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}\n", .{ aaaa.addr[0], aaaa.addr[1], aaaa.addr[2], aaaa.addr[3], aaaa.addr[4], aaaa.addr[5], aaaa.addr[6], aaaa.addr[7], aaaa.addr[8], aaaa.addr[9], aaaa.addr[10], aaaa.addr[11], aaaa.addr[12], aaaa.addr[13], aaaa.addr[14], aaaa.addr[15] }),
         }
     }
 
     pub fn deinit(self: *const RecordData, gpa: Allocator) void {
         switch (self.*) {
-            .a => { },
+            .a => {},
             .ns => |ns| gpa.free(ns.nsdname),
             .md => |md| gpa.free(md.madname),
             .mf => |mf| gpa.free(mf.madname),
@@ -282,18 +277,18 @@ pub const RecordData = union(RecordType) {
             .mb => |mb| gpa.free(mb.madname),
             .mg => |mg| gpa.free(mg.madname),
             .mr => |mr| gpa.free(mr.newname),
-            .null => { },
-            .wks => { },
+            .null => {},
+            .wks => {},
             .ptr => |ptr| gpa.free(ptr.ptrdname),
-            .hinfo => { },
+            .hinfo => {},
             .minfo => |minfo| {
                 gpa.free(minfo.rmailbx);
                 gpa.free(minfo.emailbx);
             },
             .mx => |mx| gpa.free(mx.exchange),
-            .txt => { },
+            .txt => {},
 
-            .aaaa => { },
+            .aaaa => {},
         }
     }
 };
