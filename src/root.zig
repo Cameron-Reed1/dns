@@ -140,27 +140,25 @@ pub const RecordData = union(RecordType) {
             .ns => blk: {
                 var reader = Io.Reader.fixed(data);
                 const nsdname = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .ns = .{ .nsdname = nsdname } };
             },
             .md => blk: {
                 var reader = Io.Reader.fixed(data);
                 const madname = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .md = .{ .madname = madname } };
             },
             .mf => blk: {
                 var reader = Io.Reader.fixed(data);
                 const madname = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .mf = .{ .madname = madname } };
             },
             .cname => blk: {
-                std.debug.print("{any}\n", .{ data });
                 var reader = Io.Reader.fixed(data);
                 const cname = try parseDomainNameString(ctx, &reader);
-                std.debug.print("{s}, {any}, {d}\n", .{ cname, reader.buffered(), reader.bufferedLen() });
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .cname = .{ .cname = cname } };
             },
             .soa => blk: {
@@ -182,19 +180,19 @@ pub const RecordData = union(RecordType) {
             .mb => blk: {
                 var reader = Io.Reader.fixed(data);
                 const madname = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .mb = .{ .madname = madname } };
             },
             .mg => blk: {
                 var reader = Io.Reader.fixed(data);
                 const madname = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .mg = .{ .madname = madname } };
             },
             .mr => blk: {
                 var reader = Io.Reader.fixed(data);
                 const newname = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .mr = .{ .newname = newname } };
             },
             .null => .{ .null = .{ .data = data } },
@@ -205,7 +203,7 @@ pub const RecordData = union(RecordType) {
             .ptr => blk: {
                 var reader = Io.Reader.fixed(data);
                 const ptrdname = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .ptr = .{ .ptrdname = ptrdname } };
             },
             .hinfo => blk: {
@@ -223,7 +221,7 @@ pub const RecordData = union(RecordType) {
                 var reader = Io.Reader.fixed(data);
                 const rmailbx = try parseDomainNameString(ctx, &reader);
                 const emailbx = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
                 break :blk .{ .minfo = .{ .rmailbx = rmailbx, .emailbx = emailbx } };
             },
             .mx => blk: {
@@ -231,7 +229,7 @@ pub const RecordData = union(RecordType) {
 
                 var reader = Io.Reader.fixed(data[2..]);
                 const exchange = try parseDomainNameString(ctx, &reader);
-                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
 
                 break :blk .{ .mx = .{ .preference = preference, .exchange = exchange } };
             },
@@ -251,7 +249,7 @@ pub const RecordData = union(RecordType) {
             .md => |md| std.debug.print("MD: {s}\n", .{ md.madname }),
             .mf => |mf| std.debug.print("MF: {s}\n", .{ mf.madname }),
             .cname => |cname| std.debug.print("CNAME: {s}\n", .{ cname.cname }),
-            .soa => |soa| std.debug.print("SOA:\n\tMNAME: {s}\n\tRNAME: {s}\n\tSERIAL: {d}\n\tREFRESH: {d}\n\tRETRY: {d}\n\tEXPIRE: {d}\n\tMINIMUM: {d}\n\t",
+            .soa => |soa| std.debug.print("SOA:\n\tMNAME: {s}\n\tRNAME: {s}\n\tSERIAL: {d}\n\tREFRESH: {d}\n\tRETRY: {d}\n\tEXPIRE: {d}\n\tMINIMUM: {d}\n",
                 .{ soa.mname, soa.rname, soa.serial, soa.refresh, soa.retry, soa.expire, soa.minimum }),
             .mb => |mb| std.debug.print("MB: {s}\n", .{ mb.madname }),
             .mg => |mg| std.debug.print("MG: {s}\n", .{ mg.madname }),
@@ -264,7 +262,7 @@ pub const RecordData = union(RecordType) {
             .mx => |mx| std.debug.print("MX:\n\tPREFERENCE: {d}\n\tEXCHANGE: {s}\n", .{ mx.preference, mx.exchange }),
             .txt => |txt| std.debug.print("TXT: {s}\n", .{ txt.data }),
 
-            .aaaa => |aaaa| std.debug.print("{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}",
+            .aaaa => |aaaa| std.debug.print("AAAA: {x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}\n",
                 .{ aaaa.addr[0], aaaa.addr[1], aaaa.addr[2], aaaa.addr[3], aaaa.addr[4], aaaa.addr[5], aaaa.addr[6], aaaa.addr[7],
                     aaaa.addr[8], aaaa.addr[9], aaaa.addr[10], aaaa.addr[11], aaaa.addr[12], aaaa.addr[13], aaaa.addr[14], aaaa.addr[15] }),
         }
@@ -598,7 +596,7 @@ const ResourceRecord = struct {
     }
 };
 
-pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Result {
+pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType, addr: Io.net.IpAddress) !Result {
     const message: Message = try .initQuery(gpa, name, rtype);
     defer message.deinit(gpa);
 
@@ -606,7 +604,6 @@ pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Resu
     defer gpa.free(bytes);
 
     std.debug.print("{any}\n", .{bytes});
-    const addr: Io.net.IpAddress = .{ .ip4 = .{ .bytes = [4]u8{ 1, 1, 1, 1 }, .port = 53 } };
     // const s = try addr.connect(io, .{ .mode = .stream, .protocol = .tcp });
     const s = try addr.connect(io, .{ .mode = .dgram, .protocol = .udp });
 
@@ -638,17 +635,17 @@ pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Resu
 
     var answers = try gpa.alloc(RecordData, response.answers.len);
     for (response.answers, 0..) |ans, i| {
-        answers[i] = try RecordData.parse(&ctx, rtype, ans.data);
+        answers[i] = try RecordData.parse(&ctx, ans.type, ans.data);
     }
 
     var authority_records = try gpa.alloc(RecordData, response.authority_records.len);
     for (response.authority_records, 0..) |authority, i| {
-        authority_records[i] = try RecordData.parse(&ctx, rtype, authority.data);
+        authority_records[i] = try RecordData.parse(&ctx, authority.type, authority.data);
     }
 
     var additional_records = try gpa.alloc(RecordData, response.additional_records.len);
     for (response.additional_records, 0..) |additional, i| {
-        additional_records[i] = try RecordData.parse(&ctx, rtype, additional.data);
+        additional_records[i] = try RecordData.parse(&ctx, additional.type, additional.data);
     }
 
     return Result{
