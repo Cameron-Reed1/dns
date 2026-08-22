@@ -19,16 +19,12 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     };
 
-    const addr_str = args_iter.next() orelse "1.1.1.1";
-    const addr: Io.net.IpAddress = try .parse(addr_str, 53);
-
-    if (args_iter.next()) |extra_arg| {
-        std.debug.print("Unexpected argument: {s}\n", .{extra_arg});
-        usage();
-        std.process.exit(1);
+    while (args_iter.next()) |addr_str| {
+        const addr: Io.net.IpAddress = try .parse(addr_str, 53);
+        dns.addNameserver(addr);
     }
 
-    const result = try dns.lookup(init.gpa, init.io, domain_name, rtype, addr);
+    const result = try dns.lookup(init.gpa, init.io, domain_name, rtype);
     defer result.deinit(init.gpa);
 
     if (result.answers.len != 0) {

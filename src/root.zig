@@ -1,8 +1,10 @@
 const std = @import("std");
+const config = @import("config");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 var next_id: std.atomic.Value(u16) = .init(1);
+var nameservers: [config.max_nameservers]?Io.net.IpAddress = @splat(null);
 
 pub const Result = struct {
     answers: []RecordData,
@@ -591,14 +593,36 @@ const ResourceRecord = struct {
     }
 };
 
-pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType, addr: Io.net.IpAddress) !Result {
+pub fn addNameserver(addr: Io.net.IpAddress) void {
+    for (0..nameservers.len) |i| {
+        if (nameservers[i] != null) continue;
+        nameservers[i] = addr;
+        return;
+    }
+
+    unreachable;
+}
+
+var ns_idx: usize = config.max_nameservers - 1;
+
+fn getNameserver() !Io.net.IpAddress {
+    if (nameservers[0] == null) return error.NoNameServers;
+
+    ns_idx = @mod(ns_idx + 1, config.max_nameservers);
+    if (nameservers[ns_idx] == null) ns_idx = 0;
+
+    return nameservers[ns_idx].?;
+}
+
+pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Result {
     const message: Message = try .initQuery(gpa, name, rtype);
     defer message.deinit(gpa);
 
     const bytes = try message.to_bytes(gpa);
     defer gpa.free(bytes);
 
-    std.debug.print("{any}\n", .{bytes});
+    const addr = try getNameserver();
+    std.debug.print("Using nameserver: {any}\n", .{addr});
     // const s = try addr.connect(io, .{ .mode = .stream, .protocol = .tcp });
     const s = try addr.connect(io, .{ .mode = .dgram, .protocol = .udp });
 
