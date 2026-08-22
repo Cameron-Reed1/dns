@@ -25,7 +25,31 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    try dns.lookup(init.gpa, init.io, domain_name, rtype);
+    const result = try dns.lookup(init.gpa, init.io, domain_name, rtype);
+    defer result.deinit(init.gpa);
+
+    if (result.answers.len != 0) {
+        std.debug.print("Answers:\n", .{});
+        for (result.answers) |ans| {
+            ans.print();
+        }
+    } else {
+        std.debug.print("No answers\n", .{});
+    }
+
+    if (result.authority_records.len != 0) {
+        std.debug.print("\nAuthority records:\n", .{});
+        for (result.authority_records) |r| {
+            r.print();
+        }
+    }
+
+    if (result.additional_records.len != 0) {
+        std.debug.print("\nAdditional records:\n", .{});
+        for (result.additional_records) |r| {
+            r.print();
+        }
+    }
 }
 
 fn recordTypeFromString(str: []const u8) ?dns.RecordType {

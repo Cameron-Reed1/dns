@@ -4,6 +4,23 @@ const Allocator = std.mem.Allocator;
 
 var next_id: std.atomic.Value(u16) = .init(1);
 
+
+pub const Result = struct {
+    answers: []RecordData,
+    authority_records: []RecordData,
+    additional_records: []RecordData,
+
+    pub fn deinit(self: *const Result, gpa: Allocator) void {
+        for (self.answers) |*r| r.deinit(gpa);
+        for (self.authority_records) |*r| r.deinit(gpa);
+        for (self.additional_records) |*r| r.deinit(gpa);
+
+        gpa.free(self.answers);
+        gpa.free(self.authority_records);
+        gpa.free(self.additional_records);
+    }
+};
+
 pub const RecordType = enum(u16) {
     a = 1,
     ns = 2,
@@ -112,6 +129,175 @@ pub const RecordData = union(RecordType) {
     const AAAA = struct {
         addr: [16]u8,
     };
+
+
+    pub fn parse(ctx: *MessageParseContext, rtype: RecordType, data: []const u8) !RecordData {
+        return switch (rtype) {
+            .a => blk: {
+                if (data.len != 4) return error.InvalidRDataFormat;
+                break :blk .{ .a = .{ .addr = data[0..4].* } };
+            },
+            .ns => blk: {
+                var reader = Io.Reader.fixed(data);
+                const nsdname = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .ns = .{ .nsdname = nsdname } };
+            },
+            .md => blk: {
+                var reader = Io.Reader.fixed(data);
+                const madname = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .md = .{ .madname = madname } };
+            },
+            .mf => blk: {
+                var reader = Io.Reader.fixed(data);
+                const madname = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .mf = .{ .madname = madname } };
+            },
+            .cname => blk: {
+                std.debug.print("{any}\n", .{ data });
+                var reader = Io.Reader.fixed(data);
+                const cname = try parseDomainNameString(ctx, &reader);
+                std.debug.print("{s}, {any}, {d}\n", .{ cname, reader.buffered(), reader.bufferedLen() });
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .cname = .{ .cname = cname } };
+            },
+            .soa => blk: {
+                var reader = Io.Reader.fixed(data);
+                const mname = try parseDomainNameString(ctx, &reader);
+                const rname = try parseDomainNameString(ctx, &reader);
+
+                const remaining = reader.buffered();
+                if (remaining.len != 20) return error.InvalidRDataFormat;
+
+                const serial = std.mem.readInt(u32, remaining[0..4], .big);
+                const refresh = std.mem.readInt(i32, remaining[4..8], .big);
+                const retry = std.mem.readInt(i32, remaining[8..12], .big);
+                const expire = std.mem.readInt(i32, remaining[12..16], .big);
+                const minimum = std.mem.readInt(u32, remaining[16..20], .big);
+
+                break :blk .{ .soa = .{ .mname = mname, .rname = rname, .serial = serial, .refresh = refresh, .retry = retry, .expire = expire, .minimum = minimum } };
+            },
+            .mb => blk: {
+                var reader = Io.Reader.fixed(data);
+                const madname = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .mb = .{ .madname = madname } };
+            },
+            .mg => blk: {
+                var reader = Io.Reader.fixed(data);
+                const madname = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .mg = .{ .madname = madname } };
+            },
+            .mr => blk: {
+                var reader = Io.Reader.fixed(data);
+                const newname = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .mr = .{ .newname = newname } };
+            },
+            .null => .{ .null = .{ .data = data } },
+            .wks => blk: {
+                if (data.len < 6) return error.InvalidRDataFormat;
+                break :blk .{ .wks = .{ .addr = data[0..4].*, .protocol = data[4], .bitmap = data[5..] } };
+            },
+            .ptr => blk: {
+                var reader = Io.Reader.fixed(data);
+                const ptrdname = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .ptr = .{ .ptrdname = ptrdname } };
+            },
+            .hinfo => blk: {
+                var null_idx = std.mem.indexOfScalar(u8, data, 0) orelse return error.InvalidRDataFormat;
+                const cpu = data[0..null_idx];
+
+                const remaining_data = data[0..null_idx];
+                null_idx = std.mem.indexOfScalar(u8, remaining_data, 0) orelse return error.InvalidRDataFormat;
+                const os = remaining_data[0..null_idx];
+
+                if (cpu.len + os.len + 2 != data.len) return error.InvalidRDataFormat;
+                break :blk .{ .hinfo = .{ .cpu = cpu, .os = os } };
+            },
+            .minfo => blk: {
+                var reader = Io.Reader.fixed(data);
+                const rmailbx = try parseDomainNameString(ctx, &reader);
+                const emailbx = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                break :blk .{ .minfo = .{ .rmailbx = rmailbx, .emailbx = emailbx } };
+            },
+            .mx => blk: {
+                const preference = std.mem.readInt(u16, data[0..2], .big);
+
+                var reader = Io.Reader.fixed(data[2..]);
+                const exchange = try parseDomainNameString(ctx, &reader);
+                // if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+
+                break :blk .{ .mx = .{ .preference = preference, .exchange = exchange } };
+            },
+            .txt => .{ .txt = .{ .data = data } },
+
+            .aaaa => blk: {
+                if (data.len != 16) return error.InvalidRDataFormat;
+                break :blk .{ .aaaa = .{ .addr = data[0..16].* } };
+            },
+        };
+    }
+
+    pub fn print(self: *const RecordData) void {
+        switch (self.*) {
+            .a => |a| std.debug.print("A: {d}.{d}.{d}.{d}\n", .{ a.addr[0], a.addr[1], a.addr[2], a.addr[3] }),
+            .ns => |ns| std.debug.print("NS: {s}\n", .{ ns.nsdname }),
+            .md => |md| std.debug.print("MD: {s}\n", .{ md.madname }),
+            .mf => |mf| std.debug.print("MF: {s}\n", .{ mf.madname }),
+            .cname => |cname| std.debug.print("CNAME: {s}\n", .{ cname.cname }),
+            .soa => |soa| std.debug.print("SOA:\n\tMNAME: {s}\n\tRNAME: {s}\n\tSERIAL: {d}\n\tREFRESH: {d}\n\tRETRY: {d}\n\tEXPIRE: {d}\n\tMINIMUM: {d}\n\t",
+                .{ soa.mname, soa.rname, soa.serial, soa.refresh, soa.retry, soa.expire, soa.minimum }),
+            .mb => |mb| std.debug.print("MB: {s}\n", .{ mb.madname }),
+            .mg => |mg| std.debug.print("MG: {s}\n", .{ mg.madname }),
+            .mr => |mr| std.debug.print("MR: {s}\n", .{ mr.newname }),
+            .null => |n| std.debug.print("NULL: {any}\n", .{ n.data }),
+            .wks => |wks| std.debug.print("WKS:\n\tADDR: {d}.{d}.{d}.{d}\n\tPROTOCOL: {d}\n\tBITMAP: {any}\n", .{ wks.addr[0], wks.addr[1], wks.addr[2], wks.addr[3], wks.protocol, wks.bitmap }),
+            .ptr => |ptr| std.debug.print("PTR: {s}\n", .{ ptr.ptrdname }),
+            .hinfo => |hinfo| std.debug.print("HINFO:\n\tCPU: {s}\n\tOS: {s}\n", .{ hinfo.cpu, hinfo.os }),
+            .minfo => |minfo| std.debug.print("MINFO:\n\tRMAILBX: {s}\n\tEMAILBX: {s}\n", .{ minfo.rmailbx, minfo.emailbx }),
+            .mx => |mx| std.debug.print("MX:\n\tPREFERENCE: {d}\n\tEXCHANGE: {s}\n", .{ mx.preference, mx.exchange }),
+            .txt => |txt| std.debug.print("TXT: {s}\n", .{ txt.data }),
+
+            .aaaa => |aaaa| std.debug.print("{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}:{x:2>0}",
+                .{ aaaa.addr[0], aaaa.addr[1], aaaa.addr[2], aaaa.addr[3], aaaa.addr[4], aaaa.addr[5], aaaa.addr[6], aaaa.addr[7],
+                    aaaa.addr[8], aaaa.addr[9], aaaa.addr[10], aaaa.addr[11], aaaa.addr[12], aaaa.addr[13], aaaa.addr[14], aaaa.addr[15] }),
+        }
+    }
+
+    pub fn deinit(self: *const RecordData, gpa: Allocator) void {
+        switch (self.*) {
+            .a => { },
+            .ns => |ns| gpa.free(ns.nsdname),
+            .md => |md| gpa.free(md.madname),
+            .mf => |mf| gpa.free(mf.madname),
+            .cname => |cname| gpa.free(cname.cname),
+            .soa => |soa| {
+                gpa.free(soa.mname);
+                gpa.free(soa.rname);
+            },
+            .mb => |mb| gpa.free(mb.madname),
+            .mg => |mg| gpa.free(mg.madname),
+            .mr => |mr| gpa.free(mr.newname),
+            .null => { },
+            .wks => { },
+            .ptr => |ptr| gpa.free(ptr.ptrdname),
+            .hinfo => { },
+            .minfo => |minfo| {
+                gpa.free(minfo.rmailbx);
+                gpa.free(minfo.emailbx);
+            },
+            .mx => |mx| gpa.free(mx.exchange),
+            .txt => { },
+
+            .aaaa => { },
+        }
+    }
 };
 
 const MessageParseContext = struct {
@@ -412,7 +598,7 @@ const ResourceRecord = struct {
     }
 };
 
-pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !void {
+pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Result {
     const message: Message = try .initQuery(gpa, name, rtype);
     defer message.deinit(gpa);
 
@@ -441,18 +627,35 @@ pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !void
     defer ctx.deinit();
 
     const response: Message = try .read(&ctx);
-    defer response.deinit(gpa);
+    defer {
+        for (response.questions) |q| gpa.free(q.name);
+        for (response.answers) |r| gpa.free(r.name);
+        for (response.authority_records) |r| gpa.free(r.name);
+        for (response.additional_records) |r| gpa.free(r.name);
 
-    std.debug.print("Header: {any}\n", .{response.header});
-    for (response.questions) |q| std.debug.print("Question: {any}\n", .{q});
-    for (response.answers) |r| std.debug.print("Answer: {any}\n", .{r});
-    for (response.authority_records) |r| std.debug.print("Authority: {any}\n", .{r});
-    for (response.additional_records) |r| std.debug.print("Additional: {any}\n", .{r});
+        response.deinit(gpa);
+    }
 
-    for (response.questions) |q| gpa.free(q.name);
-    for (response.answers) |r| gpa.free(r.name);
-    for (response.authority_records) |r| gpa.free(r.name);
-    for (response.additional_records) |r| gpa.free(r.name);
+    var answers = try gpa.alloc(RecordData, response.answers.len);
+    for (response.answers, 0..) |ans, i| {
+        answers[i] = try RecordData.parse(&ctx, rtype, ans.data);
+    }
+
+    var authority_records = try gpa.alloc(RecordData, response.authority_records.len);
+    for (response.authority_records, 0..) |authority, i| {
+        authority_records[i] = try RecordData.parse(&ctx, rtype, authority.data);
+    }
+
+    var additional_records = try gpa.alloc(RecordData, response.additional_records.len);
+    for (response.additional_records, 0..) |additional, i| {
+        additional_records[i] = try RecordData.parse(&ctx, rtype, additional.data);
+    }
+
+    return Result{
+        .answers = answers,
+        .authority_records = authority_records,
+        .additional_records = additional_records,
+    };
 }
 
 fn serializeDomainName(name: []const u8, bytes: *[255]u8) u8 {
@@ -492,6 +695,35 @@ fn parseDomainName(ctx: *MessageParseContext) ![]const u8 {
         }
 
         const label = try ctx.read(len);
+
+        if (name.items.len != 0) try name.append(ctx.gpa, '.');
+        try name.appendSlice(ctx.gpa, label);
+    }
+
+    ctx.read_idx = null;
+
+    return try name.toOwnedSlice(ctx.gpa);
+}
+
+fn parseDomainNameString(ctx: *MessageParseContext, str: *Io.Reader) ![]const u8 {
+    var name: std.ArrayList(u8) = .empty;
+
+    while (true) {
+        var len = if (ctx.read_idx == null) try str.takeByte() else try ctx.readByte();
+        if (len == 0) break;
+
+        if ((len & 0b1100_0000) == 0b1100_0000) {
+            // Name ptr
+            const offset_b2 = if (ctx.read_idx == null) try str.takeByte() else try ctx.readByte();
+            const offset: u16 = ((@as(u16, len) & 0b0011_1111) << 8) | offset_b2;
+
+            ctx.read_idx = offset;
+            len = try ctx.readByte();
+        } else {
+            std.debug.assert((len & 0b1100_00) == 0);
+        }
+
+        const label = if (ctx.read_idx == null) try str.take(len) else try ctx.read(len);
 
         if (name.items.len != 0) try name.append(ctx.gpa, '.');
         try name.appendSlice(ctx.gpa, label);
