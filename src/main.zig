@@ -27,10 +27,12 @@ pub fn main(init: std.process.Init) !void {
     const result = try dns.lookup(init.gpa, init.io, domain_name, rtype);
     defer result.deinit(init.gpa);
 
+    std.debug.print("Got result from nameserver: {any}\n", .{result.nameserver.?});
+
     if (result.answers.len != 0) {
         std.debug.print("Answers:\n", .{});
         for (result.answers) |ans| {
-            ans.print();
+            ans.data.print();
         }
     } else {
         std.debug.print("No answers\n", .{});
@@ -39,14 +41,14 @@ pub fn main(init: std.process.Init) !void {
     if (result.authority_records.len != 0) {
         std.debug.print("\nAuthority records:\n", .{});
         for (result.authority_records) |r| {
-            r.print();
+            r.data.print();
         }
     }
 
     if (result.additional_records.len != 0) {
         std.debug.print("\nAdditional records:\n", .{});
         for (result.additional_records) |r| {
-            r.print();
+            r.data.print();
         }
     }
 }

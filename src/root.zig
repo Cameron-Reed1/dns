@@ -6,22 +6,6 @@ const Allocator = std.mem.Allocator;
 var next_id: std.atomic.Value(u16) = .init(1);
 var nameservers: [config.max_nameservers]?Io.net.IpAddress = @splat(null);
 
-pub const Result = struct {
-    answers: []RecordData,
-    authority_records: []RecordData,
-    additional_records: []RecordData,
-
-    pub fn deinit(self: *const Result, gpa: Allocator) void {
-        for (self.answers) |*r| r.deinit(gpa);
-        for (self.authority_records) |*r| r.deinit(gpa);
-        for (self.additional_records) |*r| r.deinit(gpa);
-
-        gpa.free(self.answers);
-        gpa.free(self.authority_records);
-        gpa.free(self.additional_records);
-    }
-};
-
 pub const RecordType = enum(u16) {
     a = 1,
     ns = 2,
@@ -131,43 +115,20 @@ pub const RecordData = union(RecordType) {
         addr: [16]u8,
     };
 
-    pub fn parse(ctx: *MessageParseContext, rtype: RecordType, data: []const u8) !RecordData {
-        return switch (rtype) {
-            .a => blk: {
-                if (data.len != 4) return error.InvalidRDataFormat;
-                break :blk .{ .a = .{ .addr = data[0..4].* } };
-            },
-            .ns => blk: {
-                var reader = Io.Reader.fixed(data);
-                const nsdname = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
-                break :blk .{ .ns = .{ .nsdname = nsdname } };
-            },
-            .md => blk: {
-                var reader = Io.Reader.fixed(data);
-                const madname = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
-                break :blk .{ .md = .{ .madname = madname } };
-            },
-            .mf => blk: {
-                var reader = Io.Reader.fixed(data);
-                const madname = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
-                break :blk .{ .mf = .{ .madname = madname } };
-            },
-            .cname => blk: {
-                var reader = Io.Reader.fixed(data);
-                const cname = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
-                break :blk .{ .cname = .{ .cname = cname } };
-            },
-            .soa => blk: {
-                var reader = Io.Reader.fixed(data);
-                const mname = try parseDomainNameString(ctx, &reader);
-                const rname = try parseDomainNameString(ctx, &reader);
+    pub fn read(gpa: Allocator, ctx: *MessageParseContext, rtype: RecordType, expected_len: u16) !RecordData {
+        const old_idx = ctx.read_idx;
 
-                const remaining = reader.buffered();
-                if (remaining.len != 20) return error.InvalidRDataFormat;
+        const result: RecordData = switch (rtype) {
+            .a => .{ .a = .{ .addr = (try ctx.readArray(4)).* } },
+            .ns => .{ .ns = .{ .nsdname = try parseDomainName(gpa, ctx) } },
+            .md => .{ .md = .{ .madname = try parseDomainName(gpa, ctx) } },
+            .mf => .{ .mf = .{ .madname = try parseDomainName(gpa, ctx) } },
+            .cname => .{ .cname = .{ .cname = try parseDomainName(gpa, ctx) } },
+            .soa => blk: {
+                const mname = try parseDomainName(gpa, ctx);
+                const rname = try parseDomainName(gpa, ctx);
+
+                const remaining = try ctx.read(20);
 
                 const serial = std.mem.readInt(u32, remaining[0..4], .big);
                 const refresh = std.mem.readInt(i32, remaining[4..8], .big);
@@ -177,36 +138,17 @@ pub const RecordData = union(RecordType) {
 
                 break :blk .{ .soa = .{ .mname = mname, .rname = rname, .serial = serial, .refresh = refresh, .retry = retry, .expire = expire, .minimum = minimum } };
             },
-            .mb => blk: {
-                var reader = Io.Reader.fixed(data);
-                const madname = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
-                break :blk .{ .mb = .{ .madname = madname } };
-            },
-            .mg => blk: {
-                var reader = Io.Reader.fixed(data);
-                const madname = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
-                break :blk .{ .mg = .{ .madname = madname } };
-            },
-            .mr => blk: {
-                var reader = Io.Reader.fixed(data);
-                const newname = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
-                break :blk .{ .mr = .{ .newname = newname } };
-            },
-            .null => .{ .null = .{ .data = data } },
+            .mb => .{ .mb = .{ .madname = try parseDomainName(gpa, ctx) } },
+            .mg => .{ .mg = .{ .madname = try parseDomainName(gpa, ctx) } },
+            .mr => .{ .mr = .{ .newname = try parseDomainName(gpa, ctx) } },
+            .null => .{ .null = .{ .data = try ctx.read(expected_len) } },
             .wks => blk: {
-                if (data.len < 6) return error.InvalidRDataFormat;
+                const data = try ctx.read(expected_len);
                 break :blk .{ .wks = .{ .addr = data[0..4].*, .protocol = data[4], .bitmap = data[5..] } };
             },
-            .ptr => blk: {
-                var reader = Io.Reader.fixed(data);
-                const ptrdname = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
-                break :blk .{ .ptr = .{ .ptrdname = ptrdname } };
-            },
+            .ptr => .{ .ptr = .{ .ptrdname = try parseDomainName(gpa, ctx) } },
             .hinfo => blk: {
+                const data = try ctx.read(expected_len);
                 var null_idx = std.mem.indexOfScalar(u8, data, 0) orelse return error.InvalidRDataFormat;
                 const cpu = data[0..null_idx];
 
@@ -214,31 +156,139 @@ pub const RecordData = union(RecordType) {
                 null_idx = std.mem.indexOfScalar(u8, remaining_data, 0) orelse return error.InvalidRDataFormat;
                 const os = remaining_data[0..null_idx];
 
-                if (cpu.len + os.len + 2 != data.len) return error.InvalidRDataFormat;
                 break :blk .{ .hinfo = .{ .cpu = cpu, .os = os } };
             },
             .minfo => blk: {
-                var reader = Io.Reader.fixed(data);
-                const rmailbx = try parseDomainNameString(ctx, &reader);
-                const emailbx = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                const rmailbx = try parseDomainName(gpa, ctx);
+                const emailbx = try parseDomainName(gpa, ctx);
                 break :blk .{ .minfo = .{ .rmailbx = rmailbx, .emailbx = emailbx } };
             },
             .mx => blk: {
-                const preference = std.mem.readInt(u16, data[0..2], .big);
-
-                var reader = Io.Reader.fixed(data[2..]);
-                const exchange = try parseDomainNameString(ctx, &reader);
-                if (reader.bufferedLen() != 0) return error.InvalidRDataFormat;
+                const preference = try ctx.readInt(u16);
+                const exchange = try parseDomainName(gpa, ctx);
 
                 break :blk .{ .mx = .{ .preference = preference, .exchange = exchange } };
             },
-            .txt => .{ .txt = .{ .data = data } },
+            .txt => .{ .txt = .{ .data = try ctx.read(expected_len) } },
 
-            .aaaa => blk: {
-                if (data.len != 16) return error.InvalidRDataFormat;
-                break :blk .{ .aaaa = .{ .addr = data[0..16].* } };
+            .aaaa => .{ .aaaa = .{ .addr = (try ctx.readArray(16)).* } },
+        };
+
+        if (ctx.read_idx != old_idx + expected_len) return error.InvalidRDataFormat;
+
+        return result;
+    }
+
+    pub fn serialize(self: *const RecordData, gpa: Allocator) ![]const u8 {
+        return switch (self.*) {
+            .a => |a| try gpa.dupe(u8, &a.addr),
+            .ns => |ns| blk: {
+                var buf: [255]u8 = undefined;
+                const len = serializeDomainName(ns.nsdname, &buf);
+                break :blk try gpa.dupe(u8, buf[0..len]);
             },
+            .md => |md| blk: {
+                var buf: [255]u8 = undefined;
+                const len = serializeDomainName(md.madname, &buf);
+                break :blk try gpa.dupe(u8, buf[0..len]);
+            },
+            .mf => |mf| blk: {
+                var buf: [255]u8 = undefined;
+                const len = serializeDomainName(mf.madname, &buf);
+                break :blk try gpa.dupe(u8, buf[0..len]);
+            },
+            .cname => |cname| blk: {
+                var buf: [255]u8 = undefined;
+                const len = serializeDomainName(cname.cname, &buf);
+                break :blk try gpa.dupe(u8, buf[0..len]);
+            },
+            .soa => |soa| blk: {
+                var buf: std.ArrayList(u8) = .empty;
+
+                var name_buf: [255]u8 = undefined;
+                const mname_len = serializeDomainName(soa.mname, &name_buf);
+                try buf.appendSlice(gpa, name_buf[0..mname_len]);
+
+                const rname_len = serializeDomainName(soa.rname, &name_buf);
+                try buf.ensureUnusedCapacity(gpa, rname_len + 20);
+                buf.appendSliceAssumeCapacity(name_buf[0..rname_len]);
+
+                var ints: [20]u8 = undefined;
+                std.mem.writeInt(u32, ints[0..4], soa.serial, .big);
+                std.mem.writeInt(i32, ints[4..8], soa.refresh, .big);
+                std.mem.writeInt(i32, ints[8..12], soa.retry, .big);
+                std.mem.writeInt(i32, ints[12..16], soa.expire, .big);
+                std.mem.writeInt(u32, ints[16..20], soa.minimum, .big);
+
+                buf.appendSliceAssumeCapacity(&ints);
+
+                break :blk try buf.toOwnedSlice(gpa);
+            },
+            .mb => |mb| blk: {
+                var buf: [255]u8 = undefined;
+                const len = serializeDomainName(mb.madname, &buf);
+                break :blk try gpa.dupe(u8, buf[0..len]);
+            },
+            .mg => |mg| blk: {
+                var buf: [255]u8 = undefined;
+                const len = serializeDomainName(mg.madname, &buf);
+                break :blk try gpa.dupe(u8, buf[0..len]);
+            },
+            .mr => |mr| blk: {
+                var buf: [255]u8 = undefined;
+                const len = serializeDomainName(mr.newname, &buf);
+                break :blk try gpa.dupe(u8, buf[0..len]);
+            },
+            .null => |n| try gpa.dupe(u8, n.data),
+            .wks => |wks| blk: {
+                var buf = try gpa.alloc(u8, 5 + wks.bitmap.len);
+
+                @memcpy(buf[0..4], wks.addr[0..4]);
+                buf[4] = wks.protocol;
+                @memcpy(buf[5..][0..wks.bitmap.len], wks.bitmap);
+
+                break :blk buf;
+            },
+            .ptr => |ptr| blk: {
+                var buf: [255]u8 = undefined;
+                const len = serializeDomainName(ptr.ptrdname, &buf);
+                break :blk try gpa.dupe(u8, buf[0..len]);
+            },
+            .hinfo => |hinfo| blk: {
+                var buf = try gpa.alloc(u8, hinfo.cpu.len + hinfo.os.len + 2);
+
+                @memcpy(buf[0..hinfo.cpu.len], hinfo.cpu);
+                buf[hinfo.cpu.len] = 0;
+                @memcpy(buf[hinfo.cpu.len + 1 ..][0..hinfo.os.len], hinfo.os);
+                buf[buf.len] = 0;
+
+                break :blk buf;
+            },
+            .minfo => |minfo| blk: {
+                var buf: std.ArrayList(u8) = .empty;
+
+                var name_buf: [255]u8 = undefined;
+                const rmailbx_len = serializeDomainName(minfo.rmailbx, &name_buf);
+                try buf.appendSlice(gpa, name_buf[0..rmailbx_len]);
+
+                const emailbx_len = serializeDomainName(minfo.emailbx, &name_buf);
+                try buf.appendSlice(gpa, name_buf[0..emailbx_len]);
+
+                break :blk try buf.toOwnedSlice(gpa);
+            },
+            .mx => |mx| blk: {
+                var name_buf: [255]u8 = undefined;
+                const len = serializeDomainName(mx.exchange, &name_buf);
+
+                const buf = try gpa.alloc(u8, len + 2);
+                std.mem.writeInt(u16, buf[0..2], mx.preference, .big);
+                @memcpy(buf[2..][0..len], name_buf[0..len]);
+
+                break :blk buf;
+            },
+            .txt => |txt| try gpa.dupe(u8, txt.data),
+
+            .aaaa => |aaaa| try gpa.dupe(u8, &aaaa.addr),
         };
     }
 
@@ -296,22 +346,20 @@ pub const RecordData = union(RecordType) {
 };
 
 const MessageParseContext = struct {
-    gpa: Allocator,
-    bytes: std.ArrayList(u8) = .empty,
-    reader: *Io.Reader,
-    read_idx: ?usize = null,
+    bytes: []const u8,
+    read_idx: usize = 0,
 
     pub fn read(self: *MessageParseContext, n: usize) ![]const u8 {
-        if (self.read_idx) |idx| {
-            std.debug.assert(idx + n <= self.bytes.items.len);
-            self.read_idx = idx + n;
-            return self.bytes.items[idx..][0..n];
-        }
+        std.debug.assert(self.read_idx + n <= self.bytes.len);
 
-        const bytes = try self.reader.take(n);
-        try self.bytes.appendSlice(self.gpa, bytes);
+        const idx = self.read_idx;
+        self.read_idx += n;
+        return self.bytes[idx..][0..n];
+    }
 
-        return self.bytes.items[self.bytes.items.len - bytes.len .. self.bytes.items.len];
+    pub fn readArray(self: *MessageParseContext, comptime n: usize) !*const [n]u8 {
+        const slice = try self.read(n);
+        return slice[0..n];
     }
 
     pub fn readByte(self: *MessageParseContext) !u8 {
@@ -323,13 +371,10 @@ const MessageParseContext = struct {
         const n = @divExact(@typeInfo(T).int.bits, 8);
         return std.mem.readInt(T, (try self.read(n))[0..n], .big);
     }
-
-    pub fn deinit(self: *MessageParseContext) void {
-        self.bytes.deinit(self.gpa);
-    }
 };
 
 const Message = struct {
+    nameserver: ?Io.net.IpAddress,
     header: MessageHeader,
     questions: []MessageQuestion,
     answers: []ResourceRecord,
@@ -345,12 +390,13 @@ const Message = struct {
         errdefer gpa.free(questions);
 
         questions[0] = .{
-            .name = name,
+            .name = try gpa.dupe(u8, name),
             .type = rec_type,
             .class = .in,
         };
 
         return .{
+            .nameserver = null,
             .header = header,
             .questions = questions,
             .answers = &.{},
@@ -360,9 +406,16 @@ const Message = struct {
     }
 
     pub fn deinit(self: *const Message, gpa: Allocator) void {
+        for (self.questions) |q| gpa.free(q.name);
         if (self.questions.len != 0) gpa.free(self.questions);
+
+        for (self.answers) |r| r.deinit(gpa);
         if (self.answers.len != 0) gpa.free(self.answers);
+
+        for (self.authority_records) |r| r.deinit(gpa);
         if (self.authority_records.len != 0) gpa.free(self.authority_records);
+
+        for (self.additional_records) |r| r.deinit(gpa);
         if (self.additional_records.len != 0) gpa.free(self.additional_records);
     }
 
@@ -403,31 +456,32 @@ const Message = struct {
         return try msg.toOwnedSlice(gpa);
     }
 
-    pub fn read(ctx: *MessageParseContext) !Message {
+    pub fn read(gpa: Allocator, ctx: *MessageParseContext, from: Io.net.IpAddress) !Message {
         const header_bytes = try ctx.read(12);
         const header: MessageHeader = .from_bytes(header_bytes);
 
-        const questions = try ctx.gpa.alloc(MessageQuestion, header.qd_count);
+        const questions = try gpa.alloc(MessageQuestion, header.qd_count);
         for (questions) |*q| {
-            q.* = try .read(ctx);
+            q.* = try .read(gpa, ctx);
         }
 
-        const answers = try ctx.gpa.alloc(ResourceRecord, header.an_count);
+        const answers = try gpa.alloc(ResourceRecord, header.an_count);
         for (answers) |*r| {
-            r.* = try .read(ctx);
+            r.* = try .read(gpa, ctx);
         }
 
-        const authority_records = try ctx.gpa.alloc(ResourceRecord, header.ns_count);
+        const authority_records = try gpa.alloc(ResourceRecord, header.ns_count);
         for (authority_records) |*r| {
-            r.* = try .read(ctx);
+            r.* = try .read(gpa, ctx);
         }
 
-        const additional_records = try ctx.gpa.alloc(ResourceRecord, header.ar_count);
+        const additional_records = try gpa.alloc(ResourceRecord, header.ar_count);
         for (additional_records) |*r| {
-            r.* = try .read(ctx);
+            r.* = try .read(gpa, ctx);
         }
 
         return Message{
+            .nameserver = from,
             .header = header,
             .questions = questions,
             .answers = answers,
@@ -533,9 +587,9 @@ const MessageQuestion = struct {
         return bytes;
     }
 
-    pub fn read(ctx: *MessageParseContext) !MessageQuestion {
-        const name = try parseDomainName(ctx);
-        errdefer ctx.gpa.free(name);
+    pub fn read(gpa: Allocator, ctx: *MessageParseContext) !MessageQuestion {
+        const name = try parseDomainName(gpa, ctx);
+        errdefer gpa.free(name);
 
         const rtype = try ctx.readInt(u16);
         const class = try ctx.readInt(u16);
@@ -550,30 +604,32 @@ const MessageQuestion = struct {
 
 const ResourceRecord = struct {
     name: []const u8,
-    type: RecordType,
     class: Class,
     ttl: u32,
-    data: []const u8,
+    data: RecordData,
 
     pub fn to_bytes(self: *const ResourceRecord, gpa: Allocator) ![]const u8 {
         var name_bytes: [255]u8 = @splat(0);
         const len = serializeDomainName(self.name, &name_bytes);
 
-        var bytes = try gpa.alloc(u8, len + 10 + self.data.len);
+        const data_bytes = try self.data.serialize(gpa);
+        defer gpa.free(data_bytes);
+
+        var bytes = try gpa.alloc(u8, len + 10 + data_bytes.len);
 
         @memcpy(bytes[0..len], name_bytes[0..len]);
-        std.mem.writeInt(u16, bytes[len..][0..2], @intFromEnum(self.type), .big);
+        std.mem.writeInt(u16, bytes[len..][0..2], @intFromEnum(self.data), .big);
         std.mem.writeInt(u16, bytes[len + 2 ..][0..2], @intFromEnum(self.class), .big);
         std.mem.writeInt(u32, bytes[len + 4 ..][0..4], self.ttl, .big);
-        std.mem.writeInt(u16, bytes[len + 8 ..][0..2], @intCast(self.data.len), .big);
-        @memcpy(bytes[len + 10 ..][0..self.data.len], self.data);
+        std.mem.writeInt(u16, bytes[len + 8 ..][0..2], @intCast(data_bytes.len), .big);
+        @memcpy(bytes[len + 10 ..][0..data_bytes.len], data_bytes);
 
         return bytes;
     }
 
-    pub fn read(ctx: *MessageParseContext) !ResourceRecord {
-        const name = try parseDomainName(ctx);
-        errdefer ctx.gpa.free(name);
+    pub fn read(gpa: Allocator, ctx: *MessageParseContext) !ResourceRecord {
+        const name = try parseDomainName(gpa, ctx);
+        errdefer gpa.free(name);
 
         const rtype = try ctx.readInt(u16);
         const class = try ctx.readInt(u16);
@@ -581,15 +637,21 @@ const ResourceRecord = struct {
         const ttl = try ctx.readInt(u32);
 
         const rd_len = try ctx.readInt(u16);
-        const data = try ctx.read(rd_len);
+        const old_idx = ctx.read_idx;
+        const data = try RecordData.read(gpa, ctx, @enumFromInt(rtype), rd_len);
+        std.debug.assert(ctx.read_idx == old_idx + rd_len);
 
         return .{
             .name = name,
-            .type = @enumFromInt(rtype),
             .class = @enumFromInt(class),
             .ttl = ttl,
             .data = data,
         };
+    }
+
+    pub fn deinit(self: *const ResourceRecord, gpa: Allocator) void {
+        gpa.free(self.name);
+        self.data.deinit(gpa);
     }
 };
 
@@ -614,7 +676,7 @@ fn getNameserver() !Io.net.IpAddress {
     return nameservers[ns_idx].?;
 }
 
-pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Result {
+pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Message {
     const message: Message = try .initQuery(gpa, name, rtype);
     defer message.deinit(gpa);
 
@@ -622,56 +684,15 @@ pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Resu
     defer gpa.free(bytes);
 
     const addr = try getNameserver();
-    std.debug.print("Using nameserver: {any}\n", .{addr});
-    // const s = try addr.connect(io, .{ .mode = .stream, .protocol = .tcp });
     const s = try addr.connect(io, .{ .mode = .dgram, .protocol = .udp });
 
-    var write_buf: [1024]u8 = undefined;
-    var stream_writer = s.writer(io, &write_buf);
-    const writer = &stream_writer.interface;
+    var read_buf: [4096]u8 = undefined;
+    try s.socket.send(io, &addr, bytes);
 
-    var read_buf: [1024]u8 = undefined;
-    var stream_reader = s.reader(io, &read_buf);
-    const reader = &stream_reader.interface;
+    const msg = try s.socket.receiveTimeout(io, &read_buf, .{ .duration = .{ .clock = .real, .raw = .fromSeconds(5) } });
+    var ctx: MessageParseContext = .{ .bytes = msg.data };
 
-    // try writer.writeInt(u16, @intCast(bytes.len), .big);
-    try writer.writeAll(bytes);
-    try writer.flush();
-    std.debug.print("Write finished\n", .{});
-
-    var ctx: MessageParseContext = .{ .gpa = gpa, .reader = reader };
-    defer ctx.deinit();
-
-    const response: Message = try .read(&ctx);
-    defer {
-        for (response.questions) |q| gpa.free(q.name);
-        for (response.answers) |r| gpa.free(r.name);
-        for (response.authority_records) |r| gpa.free(r.name);
-        for (response.additional_records) |r| gpa.free(r.name);
-
-        response.deinit(gpa);
-    }
-
-    var answers = try gpa.alloc(RecordData, response.answers.len);
-    for (response.answers, 0..) |ans, i| {
-        answers[i] = try RecordData.parse(&ctx, ans.type, ans.data);
-    }
-
-    var authority_records = try gpa.alloc(RecordData, response.authority_records.len);
-    for (response.authority_records, 0..) |authority, i| {
-        authority_records[i] = try RecordData.parse(&ctx, authority.type, authority.data);
-    }
-
-    var additional_records = try gpa.alloc(RecordData, response.additional_records.len);
-    for (response.additional_records, 0..) |additional, i| {
-        additional_records[i] = try RecordData.parse(&ctx, additional.type, additional.data);
-    }
-
-    return Result{
-        .answers = answers,
-        .authority_records = authority_records,
-        .additional_records = additional_records,
-    };
+    return try .read(gpa, &ctx, msg.from);
 }
 
 fn serializeDomainName(name: []const u8, bytes: *[255]u8) u8 {
@@ -692,11 +713,12 @@ fn serializeDomainName(name: []const u8, bytes: *[255]u8) u8 {
     return idx;
 }
 
-fn parseDomainName(ctx: *MessageParseContext) ![]const u8 {
+fn parseDomainName(gpa: Allocator, ctx: *MessageParseContext) ![]const u8 {
     var name: std.ArrayList(u8) = .empty;
+    var old_idx: ?usize = null;
 
     while (true) {
-        var len = try ctx.readByte();
+        const len = try ctx.readByte();
         if (len == 0) break;
 
         if ((len & 0b1100_0000) == 0b1100_0000) {
@@ -704,48 +726,20 @@ fn parseDomainName(ctx: *MessageParseContext) ![]const u8 {
             const offset_b2 = try ctx.readByte();
             const offset: u16 = ((@as(u16, len) & 0b0011_1111) << 8) | offset_b2;
 
+            if (old_idx == null) old_idx = ctx.read_idx;
             ctx.read_idx = offset;
-            len = try ctx.readByte();
+            continue;
         } else {
             std.debug.assert((len & 0b1100_00) == 0);
         }
 
         const label = try ctx.read(len);
 
-        if (name.items.len != 0) try name.append(ctx.gpa, '.');
-        try name.appendSlice(ctx.gpa, label);
+        if (name.items.len != 0) try name.append(gpa, '.');
+        try name.appendSlice(gpa, label);
     }
 
-    ctx.read_idx = null;
+    if (old_idx) |idx| ctx.read_idx = idx;
 
-    return try name.toOwnedSlice(ctx.gpa);
-}
-
-fn parseDomainNameString(ctx: *MessageParseContext, str: *Io.Reader) ![]const u8 {
-    var name: std.ArrayList(u8) = .empty;
-
-    while (true) {
-        var len = if (ctx.read_idx == null) try str.takeByte() else try ctx.readByte();
-        if (len == 0) break;
-
-        if ((len & 0b1100_0000) == 0b1100_0000) {
-            // Name ptr
-            const offset_b2 = if (ctx.read_idx == null) try str.takeByte() else try ctx.readByte();
-            const offset: u16 = ((@as(u16, len) & 0b0011_1111) << 8) | offset_b2;
-
-            ctx.read_idx = offset;
-            len = try ctx.readByte();
-        } else {
-            std.debug.assert((len & 0b1100_00) == 0);
-        }
-
-        const label = if (ctx.read_idx == null) try str.take(len) else try ctx.read(len);
-
-        if (name.items.len != 0) try name.append(ctx.gpa, '.');
-        try name.appendSlice(ctx.gpa, label);
-    }
-
-    ctx.read_idx = null;
-
-    return try name.toOwnedSlice(ctx.gpa);
+    return try name.toOwnedSlice(gpa);
 }
