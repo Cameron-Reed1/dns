@@ -24,7 +24,8 @@ pub fn main(init: std.process.Init) !void {
         dns.addNameserver(addr);
     }
 
-    const result = try dns.lookup(init.gpa, init.io, domain_name, rtype);
+    var future = init.io.async(dns.lookup, .{ init.gpa, init.io, domain_name, rtype });
+    const result = try future.await(init.io);
     defer result.deinit(init.gpa);
 
     std.debug.print("Got result from nameserver: {any}\n", .{result.nameserver.?});
