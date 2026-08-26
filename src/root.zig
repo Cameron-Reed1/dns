@@ -108,7 +108,7 @@ pub const RecordData = union(RecordType) {
         exchange: []const u8,
     };
     const TXT = struct {
-        data: []const u8,
+        strings: []const []const u8,
     };
 
     const AAAA = struct {
@@ -169,7 +169,26 @@ pub const RecordData = union(RecordType) {
 
                 break :blk .{ .mx = .{ .preference = preference, .exchange = exchange } };
             },
-            .txt => .{ .txt = .{ .data = try ctx.read(expected_len) } },
+            .txt => blk: {
+                var strings: std.ArrayList([]const u8) = .empty;
+                errdefer {
+                    for (strings.items) |s| gpa.free(s);
+                    strings.deinit(gpa);
+                }
+                var remaining_len = expected_len;
+
+                while (remaining_len > 0) {
+                    const len = try ctx.readByte();
+
+                    const s = try ctx.read(len);
+                    const string = try gpa.dupe(u8, s);
+                    try strings.append(gpa, string);
+
+                    remaining_len -= len + 1;
+                }
+
+                break :blk .{ .txt = .{ .strings = try strings.toOwnedSlice(gpa) } };
+            },
 
             .aaaa => .{ .aaaa = .{ .addr = (try ctx.readArray(16)).* } },
         };
@@ -286,7 +305,23 @@ pub const RecordData = union(RecordType) {
 
                 break :blk buf;
             },
-            .txt => |txt| try gpa.dupe(u8, txt.data),
+            .txt => |txt| blk: {
+                var len = txt.strings.len;
+                for (txt.strings) |s| len += s.len;
+
+                var buf = try gpa.alloc(u8, len);
+                var idx: usize = 0;
+
+                for (txt.strings) |s| {
+                    buf[idx] = @intCast(s.len);
+                    idx += 1;
+
+                    @memcpy(buf[idx..][0..s.len], s);
+                    idx += s.len;
+                }
+
+                break :blk buf;
+            },
 
             .aaaa => |aaaa| try gpa.dupe(u8, &aaaa.addr),
         };
@@ -309,7 +344,15 @@ pub const RecordData = union(RecordType) {
             .hinfo => |hinfo| std.debug.print("HINFO:\n\tCPU: {s}\n\tOS: {s}\n", .{ hinfo.cpu, hinfo.os }),
             .minfo => |minfo| std.debug.print("MINFO:\n\tRMAILBX: {s}\n\tEMAILBX: {s}\n", .{ minfo.rmailbx, minfo.emailbx }),
             .mx => |mx| std.debug.print("MX:\n\tPREFERENCE: {d}\n\tEXCHANGE: {s}\n", .{ mx.preference, mx.exchange }),
-            .txt => |txt| std.debug.print("TXT: {s}\n", .{txt.data}),
+            .txt => |txt| {
+                std.debug.print("TXT: ", .{});
+                if (txt.strings.len == 1) {
+                    std.debug.print("{s}", .{txt.strings[0]});
+                } else if (txt.strings.len > 1) {
+                    for (txt.strings) |s| std.debug.print("\n{s}", .{s});
+                }
+                std.debug.print("\n", .{});
+            },
 
             .aaaa => |aaaa| std.debug.print("AAAA: {x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}\n", .{ aaaa.addr[0], aaaa.addr[1], aaaa.addr[2], aaaa.addr[3], aaaa.addr[4], aaaa.addr[5], aaaa.addr[6], aaaa.addr[7], aaaa.addr[8], aaaa.addr[9], aaaa.addr[10], aaaa.addr[11], aaaa.addr[12], aaaa.addr[13], aaaa.addr[14], aaaa.addr[15] }),
         }
@@ -338,7 +381,10 @@ pub const RecordData = union(RecordType) {
                 gpa.free(minfo.emailbx);
             },
             .mx => |mx| gpa.free(mx.exchange),
-            .txt => {},
+            .txt => |txt| {
+                for (txt.strings) |s| gpa.free(s);
+                gpa.free(txt.strings);
+            },
 
             .aaaa => {},
         }
