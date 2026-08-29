@@ -732,9 +732,9 @@ pub fn lookup(gpa: Allocator, io: Io, name: []const u8, rtype: RecordType) !Mess
     const addr = try getNameserver();
     const s = try addr.connect(io, .{ .mode = .dgram, .protocol = .udp });
 
-    var read_buf: [4096]u8 = undefined;
     try s.socket.send(io, &addr, bytes);
 
+    var read_buf: [4096]u8 = undefined;
     const msg = try s.socket.receiveTimeout(io, &read_buf, .{ .duration = .{ .clock = .real, .raw = .fromSeconds(5) } });
     var ctx: MessageParseContext = .{ .bytes = msg.data };
 
@@ -776,7 +776,7 @@ fn parseDomainName(gpa: Allocator, ctx: *MessageParseContext) ![]const u8 {
             ctx.read_idx = offset;
             continue;
         } else {
-            std.debug.assert((len & 0b1100_00) == 0);
+            std.debug.assert((len & 0b1100_0000) == 0);
         }
 
         const label = try ctx.read(len);
